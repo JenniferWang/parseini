@@ -23,13 +23,14 @@ library
   build-depends:       base >= 4.7 && < 5
                      , bytestring
                      , containers
+                     , attoparsec
   default-language:    Haskell2010
   ghc-options:         -Wall
 
 executable parseini-exe
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N -fno-warn-unused-do-bind
   build-depends:       base
                      , parseini
                      , bytestring
