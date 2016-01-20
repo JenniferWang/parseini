@@ -14,7 +14,7 @@ module ParseIni
 
 import Prelude hiding (takeWhile, take)
 import Data.ByteString.Char8 (pack, unpack)
-import Data.Attoparsec.ByteString.Char8(char, peekChar, space, anyChar)
+import Data.Attoparsec.ByteString.Char8(char, peekChar, anyChar)
 import qualified Data.Attoparsec.ByteString.Char8 as C
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
@@ -52,8 +52,6 @@ type INISection = M.Map INIKey [INIVal]
 
 -- |An @INIFile@ is a map from @INISectName@s to @INISection@s.
 type INIFile = M.Map INISectName INISection
-
-type Sign = Bool
 
 -- **** INTERFACE ****
 -- You need to implement these so that we can test your code!
@@ -114,22 +112,26 @@ parseIniFile = parseOnly pINIFile
 p_strToByte :: String -> Parser B.ByteString
 p_strToByte = string . pack
 
-isEOL = inClass "\n\b"
+isEOL = inClass "\n"
 
-eol = char '\n'
+eol = skipMany (p_strToByte "\n")
 
 between :: Parser open -> Parser close -> Parser a -> Parser a
 between open close a = open *> a <* close
 
-pSkipRestOfLine = skipWhile (\x -> not (isEOL x)) *> try eol
+pSkipRestOfLine :: Parser ()
+pSkipRestOfLine = skipWhile (\x -> not (isEOL x)) *> eol
 
-pSkipLines = many $ try eol <|> try (pSpaces *> pComment)
+pSkipLines :: Parser ()
+pSkipLines = skipMany $ eol <|> (pSpaces *> pComment)
 
-pSkipSpCm = many $ try (pSpaces *> pComment)
+pSkipSpCm :: Parser ()
+pSkipSpCm = skipMany (pSpaces *> pComment)
 
 pLine = takeWhile (\w -> not $ isEOL w)
 
-pSpaces = many space
+pSpaces :: Parser B.ByteString
+pSpaces = takeWhile (inClass " ")
 
 anyByteString :: Parser B.ByteString
 anyByteString = takeWhile (\_ -> True)
@@ -137,8 +139,7 @@ anyByteString = takeWhile (\_ -> True)
 anyString :: Parser String
 anyString = unpack <$> anyByteString
 
--- Parse comment
--- return ()
+pComment :: Parser ()
 pComment =  char '#' *> pSkipRestOfLine
         <|> char ';' *> pSkipRestOfLine
 
@@ -184,7 +185,7 @@ pValue = pSpaces *> val
   where val =  IBool   <$> pBool
            <|> IInt    <$> pInt
            <|> IString <$> pString
-           -- <?> "value for the key"
+           <?> "value for the key"
 
 pBool :: Parser Bool
 pBool  =  False <$ pFalse
@@ -255,7 +256,7 @@ pSuffixE = do
 
 pString :: Parser B.ByteString
 pString = do
-  str <- takeWhile1 (notInClass "\"\\\n#;")
+  str <- takeWhile (notInClass "\"\\\n#; ")
   sym <- peekChar
   case sym of Just '\\' -> do pSkipRestOfLine
                               rest <- pString
@@ -264,7 +265,19 @@ pString = do
               Just '\"' -> do quoted <- pQuoted
                               rest <- pString
                               return (B.append (B.append str quoted) rest)
+              Just ' '  -> do sp <- pInterSpaces
+                              rest <- pString
+                              return (B.append (B.append str sp) rest)
+              Just '\n' -> pSkipRestOfLine >> return str
               _         -> return str
+
+pInterSpaces :: Parser B.ByteString
+pInterSpaces = do
+  sp <- pSpaces
+  next <- peekChar
+  if (next `elem` [Just '\n', Just ';', Just '#'])
+     then pSkipRestOfLine >> return (pack "")
+     else return sp
 
 pQuoted :: Parser B.ByteString
 pQuoted = between (char '\"') (char '\"') pContent
@@ -273,22 +286,18 @@ pQuoted = between (char '\"') (char '\"') pContent
 -------------------------------------------------------------------------------
 pSectEntry :: Parser (INISectName, INISection)
 pSectEntry = do
-  name <- (pSkipSpCm *> pSectName <* pSkipSpCm)
-  let parseKV = many $ (pKeyValuePair <* pSkipSpCm)
+  name <- (skip *> pSectName <* skip)
+  let parseKV = many $ (pKeyValuePair <* skip)
   sect_map <- M.fromList <$> fmap groupTuple parseKV
   return (name, sect_map)
+    where skip =  (pSpaces *> eol) <|> pSkipSpCm
 
 groupTuple :: Ord a => [(a, b)] -> [(a, [b])]
 groupTuple xs = M.toList $ M.fromListWith (++) [(k, [v]) | (k, v) <- xs]
 
 pINIFile :: Parser INIFile
-pINIFile = M.fromList <$> (many pSectEntry)
-
-test_entry = do
-  name <- (pSkipLines *> pSectName <* pSkipLines)
-  kvs <- many $ (pKeyValuePair <* pSkipLines)
-  return (name, kvs)
+pINIFile = M.fromList <$> (many pSectEntry <* eol)
 
 test = (,) <$> pSectEntry <*> pSectEntry
 
-main_test =  parseOnly pINIFile
+main_test =  parseOnly pSectEntry
