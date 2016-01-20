@@ -1,2 +1,11 @@
-[ hello "test \""]
-key=true
+
+[head "subsection "]
+ pas = yes
+
+ pas = false
+; let's add some comment
+[head2]
+  pp=yes
+
+
+

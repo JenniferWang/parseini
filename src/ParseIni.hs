@@ -21,6 +21,7 @@ import qualified Data.Map.Strict as M
 import Data.Attoparsec.ByteString
 import Control.Applicative
 import Data.Char (toLower)
+import Data.Bits (shift)
 
 
 -- **** TYPES ****
@@ -52,6 +53,7 @@ type INISection = M.Map INIKey [INIVal]
 -- |An @INIFile@ is a map from @INISectName@s to @INISection@s.
 type INIFile = M.Map INISectName INISection
 
+type Sign = Bool
 
 -- **** INTERFACE ****
 -- You need to implement these so that we can test your code!
@@ -63,7 +65,6 @@ type INIFile = M.Map INISectName INISection
 -- |Given a section name and possibly a subsection name, return an
 -- appropriate @INISectName@. This function accounts for the case
 -- insensitivity of the section name.
--- TODO: How to convert?
 toSectName :: String -> Maybe String -> INISectName
 toSectName name Nothing = (ISect . pack) $ map toLower name
 toSectName name (Just subsect) =
@@ -115,10 +116,14 @@ p_strToByte = string . pack
 
 isEOL = inClass "\n\b"
 
+eol = char '\n'
+
 between :: Parser open -> Parser close -> Parser a -> Parser a
 between open close a = open *> a <* close
 
-pSkipLine = skip (\w -> not $ isEOL w)
+pSkipRestOfLine = skipWhile (\x -> not (isEOL x)) *> try eol
+
+pSkipLines = many $ try eol <|> try (pSpaces *> pComment)
 
 pLine = takeWhile (\w -> not $ isEOL w)
 
@@ -132,11 +137,14 @@ anyString = unpack <$> anyByteString
 
 -- Parse comment
 -- return ()
-pComment = (p_strToByte "#" <|> p_strToByte ";") *> pSkipLine
+pComment =  char '#' *> pSkipRestOfLine
+        <|> char ';' *> pSkipRestOfLine
 
 pSectName :: Parser INISectName
 pSectName = do
-  names <- between (char '[') (char ']') pNames
+  pSpaces
+  names <- (between (char '[' <* pSpaces) (pSpaces *> char ']') pNames)
+  pSkipRestOfLine
   return $ toSectName (fst names) (snd names)
 
 pNames :: Parser (String, Maybe String)
@@ -150,7 +158,7 @@ pNames = do
                          _  -> (name1, Just name2)
 
 pName :: Parser String
-pName = pSpaces *> many (C.satisfy (C.inClass "a-zA-Z0-9-."))
+pName = many (C.satisfy (C.inClass "a-zA-Z0-9-."))
 
 pSubName :: Parser String
 pSubName = many namechar
@@ -160,22 +168,20 @@ pSubName = many namechar
 pEscape = choice (zipWith decode "bnfrt\\\"/" "\b\n\f\r\t\\\"/")
   where decode c r = r <$ char c
 -------------------------------------------------------------------------------
-
 pKeyValuePair :: Parser (INIKey, INIVal)
 pKeyValuePair = do
-  key <- takeWhile (inClass "a-zA-Z0-9-")
-  pSpaces
-  eq <-  peekChar
+  key <- (pSpaces *> takeWhile1 (inClass "a-zA-Z0-9-")) -- 可能是[]!!
+  eq  <- (pSpaces *> peekChar)
   case eq of
     Just '=' -> do char '='
                    val <- pValue
-                   return (key, val)
-    _        -> return (key, IBool True)
+                   pSkipRestOfLine >> return (key, val)
+    _        -> pSkipRestOfLine >> return (key, IBool True)
 
 pValue :: Parser INIVal
 pValue = pSpaces *> val
   where val =  IBool   <$> pBool
-           -- <|> IInt    <$> pInt
+           <|> IInt    <$> pInt
            -- <|> IString <$> pString
            -- <?> "value for the key"
 
@@ -192,20 +198,82 @@ pFalse =  try (p_strToByte "off")
       <|> try (p_strToByte "no")
 
 pInt :: Parser Integer
-pInt = undefined
+pInt = do
+  sign <- peekChar
+  case sign
+    of Just '-' -> do anyChar
+                      number <- pSuffixNumber
+                      return (-number)
+       Just '+' -> anyChar >> pSuffixNumber
+       _        -> pSuffixNumber
+
+pSuffixNumber :: Parser Integer
+pSuffixNumber =  try pSuffixK
+             <|> try pSuffixM
+             <|> try pSuffixG
+             <|> try pSuffixT
+             <|> try pSuffixP
+             <|> try pSuffixE
+             <|> try C.decimal
+
+pSuffixK :: Parser Integer
+pSuffixK = do
+  number <- C.decimal
+  char 'k'
+  return (number * shift 1 10)
+
+pSuffixM :: Parser Integer
+pSuffixM = do
+  number <- C.decimal
+  char 'M'
+  return (number * shift 1 20)
+
+pSuffixG :: Parser Integer
+pSuffixG = do
+  number <- C.decimal
+  char 'G'
+  return (number * shift 1 30)
+
+pSuffixT :: Parser Integer
+pSuffixT = do
+  number <- C.decimal
+  char 'T'
+  return (number * shift 1 40)
+
+pSuffixP :: Parser Integer
+pSuffixP = do
+  number <- C.decimal
+  char 'P'
+  return (number * shift 1 50)
+
+pSuffixE :: Parser Integer
+pSuffixE = do
+  number <- C.decimal
+  char 'E'
+  return (number * shift 1 60)
 
 pString :: Parser B.ByteString
 pString = undefined
 
 -------------------------------------------------------------------------------
 pSectEntry :: Parser (INISectName, INISection)
-pSectEntry = (,) <$> pSectName <*> pSectMap
-  where pSectMap = M.fromList <$> fmap groupTuple (many pKeyValuePair)
+pSectEntry = do
+  name <- (pSkipLines *> pSectName <* pSkipLines)
+  let parseKV = many $ (pKeyValuePair <* pSkipLines)
+  sect_map <- M.fromList <$> fmap groupTuple parseKV
+  return (name, sect_map)
 
 groupTuple :: Ord a => [(a, b)] -> [(a, [b])]
 groupTuple xs = M.toList $ M.fromListWith (++) [(k, [v]) | (k, v) <- xs]
 
 pINIFile :: Parser INIFile
-pINIFile = M.fromList <$> (many pSectEntry <* takeByteString)
+pINIFile = M.fromList <$> (many pSectEntry <* pSkipLines)
+
+test_entry = do
+  name <- (pSkipLines *> pSectName <* pSkipLines)
+  kvs <- many $ (pKeyValuePair <* pSkipLines)
+  return (name, kvs)
+
+test = (,) <$> pSectEntry <*> pSectEntry
 
 main_test =  parseOnly pINIFile
