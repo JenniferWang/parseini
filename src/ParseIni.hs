@@ -125,6 +125,8 @@ pSkipRestOfLine = skipWhile (\x -> not (isEOL x)) *> try eol
 
 pSkipLines = many $ try eol <|> try (pSpaces *> pComment)
 
+pSkipSpCm = many $ try (pSpaces *> pComment)
+
 pLine = takeWhile (\w -> not $ isEOL w)
 
 pSpaces = many space
@@ -144,7 +146,6 @@ pSectName :: Parser INISectName
 pSectName = do
   pSpaces
   names <- (between (char '[' <* pSpaces) (pSpaces *> char ']') pNames)
-  pSkipRestOfLine
   return $ toSectName (fst names) (snd names)
 
 pNames :: Parser (String, Maybe String)
@@ -165,12 +166,12 @@ pSubName = many namechar
   where namechar = (char '\\' *> pEscape)
                   <|> C.satisfy (C.notInClass "\"\\")
 
-pEscape = choice (zipWith decode "bnfrt\\\"/" "\b\n\f\r\t\\\"/")
+pEscape = choice (zipWith decode "n\\\"" "\n\\\"")
   where decode c r = r <$ char c
 -------------------------------------------------------------------------------
 pKeyValuePair :: Parser (INIKey, INIVal)
 pKeyValuePair = do
-  key <- (pSpaces *> takeWhile1 (inClass "a-zA-Z0-9-")) -- 可能是[]!!
+  key <- (pSpaces *> takeWhile1 (inClass "a-zA-Z0-9-"))
   eq  <- (pSpaces *> peekChar)
   case eq of
     Just '=' -> do char '='
@@ -182,7 +183,7 @@ pValue :: Parser INIVal
 pValue = pSpaces *> val
   where val =  IBool   <$> pBool
            <|> IInt    <$> pInt
-           -- <|> IString <$> pString
+           <|> IString <$> pString
            -- <?> "value for the key"
 
 pBool :: Parser Bool
@@ -253,13 +254,27 @@ pSuffixE = do
   return (number * shift 1 60)
 
 pString :: Parser B.ByteString
-pString = undefined
+pString = do
+  str <- takeWhile1 (notInClass "\"\\\n#;")
+  sym <- peekChar
+  case sym of Just '\\' -> do pSkipRestOfLine
+                              rest <- pString
+                              return (B.append str rest)
+            -- TODO: any efficient solution?
+              Just '\"' -> do quoted <- pQuoted
+                              rest <- pString
+                              return (B.append (B.append str quoted) rest)
+              _         -> return str
 
+pQuoted :: Parser B.ByteString
+pQuoted = between (char '\"') (char '\"') pContent
+  where pContent = pack <$> many
+          ((char '\\' *> pEscape) <|> C.satisfy (C.notInClass "\"\\"))
 -------------------------------------------------------------------------------
 pSectEntry :: Parser (INISectName, INISection)
 pSectEntry = do
-  name <- (pSkipLines *> pSectName <* pSkipLines)
-  let parseKV = many $ (pKeyValuePair <* pSkipLines)
+  name <- (pSkipSpCm *> pSectName <* pSkipSpCm)
+  let parseKV = many $ (pKeyValuePair <* pSkipSpCm)
   sect_map <- M.fromList <$> fmap groupTuple parseKV
   return (name, sect_map)
 
@@ -267,7 +282,7 @@ groupTuple :: Ord a => [(a, b)] -> [(a, [b])]
 groupTuple xs = M.toList $ M.fromListWith (++) [(k, [v]) | (k, v) <- xs]
 
 pINIFile :: Parser INIFile
-pINIFile = M.fromList <$> (many pSectEntry <* pSkipLines)
+pINIFile = M.fromList <$> (many pSectEntry)
 
 test_entry = do
   name <- (pSkipLines *> pSectName <* pSkipLines)
