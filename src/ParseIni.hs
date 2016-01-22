@@ -20,7 +20,7 @@ import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Attoparsec.ByteString
 import Control.Applicative
-import Data.Char (toLower)
+import Data.Char (toLower, toUpper)
 import Data.Bits (shift)
 import GHC.Word (Word8)
 
@@ -139,13 +139,14 @@ pSectName = do
 
 pNames :: Parser (String, Maybe String)
 pNames = do
-  name1 <- pName
-  name2 <- between (pSpaces *> char '\"')
-                   (char '\"' <* pSpaces)
-                   pSubName
-           <|> (return "")
-  return $ case name2 of "" -> (name1, Nothing)
-                         _  -> (name1, Just name2)
+  name1 <- (pName <* pSpaces)
+  c     <- peekChar
+  if (c == Just '\"')
+     then do name2 <- between (char '\"')
+                      (char '\"' <* pSpaces)
+                      pSubName
+             return (name1, Just name2)
+     else return (name1, Nothing)
 
 pName :: Parser String
 pName = many (C.satisfy (C.inClass "a-zA-Z0-9-."))
@@ -155,20 +156,19 @@ pSubName = many namechar
   where namechar = (char '\\' *> pEscape)
                   <|> C.satisfy (C.notInClass "\"\\")
 
+pEscape :: Parser Char
 pEscape = choice (zipWith decode "bnfrt\\\"/" "\b\n\f\r\t\\\"/")
   where decode c r = r <$ char c
 -------------------------------------------------------------------------------
 pKeyValuePair :: Parser (INIKey, INIVal)
 pKeyValuePair = do
-  key <- (pSpaces *> takeWhile1 (inClass "a-zA-Z0-9-"))
+  key <- takeWhile1 (inClass "a-zA-Z0-9-")
   eq  <- (pSpaces *> peekChar)
   case eq of
-    Just '=' -> do char '='
+    Just '=' -> do anyChar
                    val <- pValue
                    return (key, val)
-                   --pSkipRestOfLine >> return (key, val)
     _        -> return (key, IBool True)
-        --pSkipRestOfLine >> return (key, IBool True)
 
 pSpaceAndBackSlash :: Parser ()
 pSpaceAndBackSlash = skipMany (try (pStrToByte " ")
@@ -185,13 +185,19 @@ pBool :: Parser Bool
 pBool  =  False <$ pFalse
       <|> True  <$ pTrue
 
-pTrue  =  try (pStrToByte "on")
-      <|> try (pStrToByte "true")
-      <|> try (pStrToByte "yes")
+pCaseInsensitiveChar :: Char -> Parser Char
+pCaseInsensitiveChar c = char (toLower c) <|> char (toUpper c)
 
-pFalse =  try (pStrToByte "off")
-      <|> try (pStrToByte "false")
-      <|> try (pStrToByte "no")
+pCaseInsensitiveString :: String -> Parser String
+pCaseInsensitiveString str = mapM pCaseInsensitiveChar str
+
+pTrue  =  try (pCaseInsensitiveString "on")
+      <|> try (pCaseInsensitiveString "true")
+      <|> try (pCaseInsensitiveString "yes")
+
+pFalse =  try (pCaseInsensitiveString "off")
+      <|> try (pCaseInsensitiveString "false")
+      <|> try (pCaseInsensitiveString "no")
 
 pInt :: Parser Integer
 pInt = do
@@ -321,4 +327,4 @@ groupTuple xs = M.toList $ M.fromListWith (++) [(k, [v]) | (k, v) <- xs]
 pINIFile :: Parser INIFile
 pINIFile = M.fromList <$> (many pSectEntry <* pEOL)
 
-main_test =  parseOnly pSectEntry
+main_test =  parseOnly pINIFile
