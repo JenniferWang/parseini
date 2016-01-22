@@ -16,12 +16,3 @@ main = do
            (\success -> (B.putStr $ prettyPrint success) >> exitSuccess)
            result
 
--- main :: IO ()
--- main = do
---     content <- B.getContents
---     let result = main_test content
---     either (\err -> putStrLn err >> exitFailure)
---            (\success -> ((putStrLn . show) success) >> exitSuccess)
---            result
-
-

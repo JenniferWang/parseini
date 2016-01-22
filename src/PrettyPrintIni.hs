@@ -44,6 +44,15 @@ printSection = M.foldrWithKey pEntry BC.empty
 printValue :: INIVal -> BC.ByteString
 printValue (IBool bool) = BC.pack (show bool)
 printValue (IInt int) = BC.pack (show int)
--- Convert escaped value back!
-printValue (IString str) = BC.concat [quote, str, quote]
+printValue (IString str) = BC.concat [quote, (escape str), quote]
+
+-- | print out the escaped chars explicitly
+escape :: BC.ByteString -> BC.ByteString
+escape = BC.concatMap go
+  where go '\"' = BC.pack "\\\""
+        go '\t' = BC.pack "\\t"
+        go '\b' = BC.pack "\\b"
+        go '\n' = BC.pack "\\n"
+        go '\\' = BC.pack "\\\\"
+        go c    = BC.singleton c
 

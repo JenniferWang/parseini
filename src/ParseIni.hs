@@ -11,8 +11,8 @@ module ParseIni
     , lookupValue
     ) where
 
-import Prelude hiding (takeWhile, take)
-import Data.ByteString.Char8 (pack)
+import Prelude hiding (takeWhile, take, concat)
+import Data.ByteString.Char8 (pack, concat)
 import Data.Attoparsec.ByteString.Char8(char, peekChar, anyChar)
 import qualified Data.Attoparsec.ByteString.Char8 as C
 import qualified Data.ByteString as B
@@ -22,7 +22,6 @@ import Control.Applicative
 import Data.Char (toLower, toUpper)
 import Data.Bits (shift)
 import GHC.Word (Word8)
-
 
 -- **** TYPES ****
 -- These are the types you should use for the results of your parse.
@@ -277,11 +276,13 @@ pInterSpaces = do
      then pSkipRestOfLine >> return (pack "")
      else return sp
 
--- TODO: should return empty not space
 pQuoted :: Parser B.ByteString
 pQuoted = between (char '\"') (char '\"') pContent
-  where pContent = pack <$> many
-          (pStrToByte "\\\n" *> return ' ' <|> (char '\\' *> pEscape) <|> C.satisfy (C.notInClass "\"\\"))
+  where pContent = concat <$> many'
+          (  pStrToByte "\\\n" *> pEmpty
+         <|> pStrToByte "\\" *> pEscapeByte
+         <|> (B.singleton <$> satisfy (notInClass "\"\\"))
+          )
 
 -------------------------------------------------------------------------------
 -- Section Entry
@@ -306,4 +307,3 @@ groupTuple xs = M.toList $ M.fromListWith (++) [(k, [v]) | (k, v) <- xs]
 pINIFile :: Parser INIFile
 pINIFile = M.fromList <$> (many pSectEntry <* pEOL)
 
-test = (,) <$> pSectEntry <*> takeWhile (\_ -> True)
