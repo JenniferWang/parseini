@@ -6,7 +6,6 @@ import PrettyPrintIni
 
 import qualified Data.ByteString as B
 import System.Exit
-import Data.Text.Encoding
 
 -- |Main - parse input file, then pretty-print the result
 -- main :: IO ()

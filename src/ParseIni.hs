@@ -13,7 +13,7 @@ module ParseIni
     ) where
 
 import Prelude hiding (takeWhile, take)
-import Data.ByteString.Char8 (pack, unpack)
+import Data.ByteString.Char8 (pack)
 import Data.Attoparsec.ByteString.Char8(char, peekChar, anyChar)
 import qualified Data.Attoparsec.ByteString.Char8 as C
 import qualified Data.ByteString as B
@@ -22,6 +22,7 @@ import Data.Attoparsec.ByteString
 import Control.Applicative
 import Data.Char (toLower)
 import Data.Bits (shift)
+import GHC.Word (Word8)
 
 
 -- **** TYPES ****
@@ -109,35 +110,23 @@ parseIniFile = parseOnly pINIFile
 -- parseIniFile should return @Left errmsg@ on error,
 -- or @Right parsedResult@ on success.
 
-p_strToByte :: String -> Parser B.ByteString
-p_strToByte = string . pack
+pStrToByte :: String -> Parser B.ByteString
+pStrToByte = string . pack
 
+isEOL :: Word8 -> Bool
 isEOL = inClass "\n"
 
-eol = skipMany (p_strToByte "\n")
+pEOL :: Parser ()
+pEOL = skipMany (pStrToByte "\n")
 
 between :: Parser open -> Parser close -> Parser a -> Parser a
 between open close a = open *> a <* close
 
 pSkipRestOfLine :: Parser ()
-pSkipRestOfLine = skipWhile (\x -> not (isEOL x)) *> eol
-
-pSkipLines :: Parser ()
-pSkipLines = skipMany $ eol <|> (pSpaces *> pComment)
-
-pSkipSpCm :: Parser ()
-pSkipSpCm = skipMany (pSpaces *> pComment)
-
-pLine = takeWhile (\w -> not $ isEOL w)
+pSkipRestOfLine = skipWhile (\x -> not (isEOL x)) *> pEOL
 
 pSpaces :: Parser B.ByteString
 pSpaces = takeWhile (inClass " ")
-
-anyByteString :: Parser B.ByteString
-anyByteString = takeWhile (\_ -> True)
-
-anyString :: Parser String
-anyString = unpack <$> anyByteString
 
 pComment :: Parser ()
 pComment =  char '#' *> pSkipRestOfLine
@@ -145,7 +134,6 @@ pComment =  char '#' *> pSkipRestOfLine
 
 pSectName :: Parser INISectName
 pSectName = do
-  pSpaces
   names <- (between (char '[' <* pSpaces) (pSpaces *> char ']') pNames)
   return $ toSectName (fst names) (snd names)
 
@@ -167,7 +155,7 @@ pSubName = many namechar
   where namechar = (char '\\' *> pEscape)
                   <|> C.satisfy (C.notInClass "\"\\")
 
-pEscape = choice (zipWith decode "n\\\"" "\n\\\"")
+pEscape = choice (zipWith decode "bnfrt\\\"/" "\b\n\f\r\t\\\"/")
   where decode c r = r <$ char c
 -------------------------------------------------------------------------------
 pKeyValuePair :: Parser (INIKey, INIVal)
@@ -177,11 +165,17 @@ pKeyValuePair = do
   case eq of
     Just '=' -> do char '='
                    val <- pValue
-                   pSkipRestOfLine >> return (key, val)
-    _        -> pSkipRestOfLine >> return (key, IBool True)
+                   return (key, val)
+                   --pSkipRestOfLine >> return (key, val)
+    _        -> return (key, IBool True)
+        --pSkipRestOfLine >> return (key, IBool True)
+
+pSpaceAndBackSlash :: Parser ()
+pSpaceAndBackSlash = skipMany (try (pStrToByte " ")
+                          <|> try (pStrToByte "\\\n"))
 
 pValue :: Parser INIVal
-pValue = pSpaces *> val
+pValue = pSpaceAndBackSlash *> val
   where val =  IBool   <$> pBool
            <|> IInt    <$> pInt
            <|> IString <$> pString
@@ -191,13 +185,13 @@ pBool :: Parser Bool
 pBool  =  False <$ pFalse
       <|> True  <$ pTrue
 
-pTrue  =  try (p_strToByte "on")
-      <|> try (p_strToByte "true")
-      <|> try (p_strToByte "yes")
+pTrue  =  try (pStrToByte "on")
+      <|> try (pStrToByte "true")
+      <|> try (pStrToByte "yes")
 
-pFalse =  try (p_strToByte "off")
-      <|> try (p_strToByte "false")
-      <|> try (p_strToByte "no")
+pFalse =  try (pStrToByte "off")
+      <|> try (pStrToByte "false")
+      <|> try (pStrToByte "no")
 
 pInt :: Parser Integer
 pInt = do
@@ -258,18 +252,33 @@ pString :: Parser B.ByteString
 pString = do
   str <- takeWhile (notInClass "\"\\\n#; ")
   sym <- peekChar
-  case sym of Just '\\' -> do pSkipRestOfLine
-                              rest <- pString
+  case sym of Nothing   -> return str
+              Just '\n' -> return str
+              Just sym  -> do rest <- (pSpecialCharInString sym)
                               return (B.append str rest)
-            -- TODO: any efficient solution?
-              Just '\"' -> do quoted <- pQuoted
-                              rest <- pString
-                              return (B.append (B.append str quoted) rest)
-              Just ' '  -> do sp <- pInterSpaces
-                              rest <- pString
-                              return (B.append (B.append str sp) rest)
-              Just '\n' -> pSkipRestOfLine >> return str
-              _         -> return str
+
+pSpecialCharInString :: Char -> Parser B.ByteString
+pSpecialCharInString c
+  | c == '\\' = do escape <- pBackSlash
+                   rest <- pString
+                   return (B.append escape rest)
+  | c == '\"' = do quoted <- pQuoted
+                   rest <- pString
+                   return (B.append quoted rest)
+  | c == ' '  = do sp <- pInterSpaces
+                   rest <- pString
+                   if (rest == pack "")
+                      then return rest
+                      else return (B.append sp rest)
+  | c `elem` ['#', ';'] = pSkipRestOfLine *> pEmpty
+  | otherwise = return (pack "You hit the wrong place")
+
+pEmpty :: Parser B.ByteString
+pEmpty = pStrToByte ""
+
+pBackSlash :: Parser B.ByteString
+pBackSlash =  try (pStrToByte "\\\n" *> pEmpty)
+          <|> try (pStrToByte "\\" *> pEscapeByte)
 
 pInterSpaces :: Parser B.ByteString
 pInterSpaces = do
@@ -279,6 +288,13 @@ pInterSpaces = do
      then pSkipRestOfLine >> return (pack "")
      else return sp
 
+-- TODO: this is a very ugly implementation
+pEscapeByte :: Parser B.ByteString
+pEscapeByte = choice (zipWith decode "bnfrt\\\"/" "\b\n\f\r\t\\\"/")
+  where
+    decode :: Char -> Char -> Parser B.ByteString
+    decode c r = (pack [r]) <$ (pStrToByte [c])
+
 pQuoted :: Parser B.ByteString
 pQuoted = between (char '\"') (char '\"') pContent
   where pContent = pack <$> many
@@ -286,18 +302,23 @@ pQuoted = between (char '\"') (char '\"') pContent
 -------------------------------------------------------------------------------
 pSectEntry :: Parser (INISectName, INISection)
 pSectEntry = do
-  name <- (skip *> pSectName <* skip)
-  let parseKV = many $ (pKeyValuePair <* skip)
-  sect_map <- M.fromList <$> fmap groupTuple parseKV
+  name <- (skips *> pSectName <* skips)
+  kvs  <- many $ (pKeyValuePair <* skips)
+  let sect_map = M.fromList (groupTuple kvs)
   return (name, sect_map)
-    where skip =  (pSpaces *> eol) <|> pSkipSpCm
+    where skips = do
+            x <- peekChar
+            case x of Nothing  -> return ()
+                      Just '\n'-> anyChar >> skips
+                      Just ' ' -> anyChar >> skips
+                      Just ';' -> pComment >> skips
+                      Just '#' -> pComment >> skips
+                      _        -> return ()
 
 groupTuple :: Ord a => [(a, b)] -> [(a, [b])]
 groupTuple xs = M.toList $ M.fromListWith (++) [(k, [v]) | (k, v) <- xs]
 
 pINIFile :: Parser INIFile
-pINIFile = M.fromList <$> (many pSectEntry <* eol)
-
-test = (,) <$> pSectEntry <*> pSectEntry
+pINIFile = M.fromList <$> (many pSectEntry <* pEOL)
 
 main_test =  parseOnly pSectEntry
