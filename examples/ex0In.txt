@@ -1,6 +1,6 @@
 
 [head "subsection "]
-  pas = yes
+  pas = "4.5"
 
  pas = false
 ; let's add some comment

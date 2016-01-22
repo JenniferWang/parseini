@@ -7,21 +7,21 @@ import PrettyPrintIni
 import qualified Data.ByteString as B
 import System.Exit
 
--- |Main - parse input file, then pretty-print the result
--- main :: IO ()
--- main = do
---     content <- B.getContents
---     let result = parseIniFile content
---     either (\err -> putStrLn err >> exitFailure)
---            (\success -> (B.putStr $ prettyPrint success) >> exitSuccess)
---            result
-
+-- | Main - parse input file, then pretty-print the result
 main :: IO ()
 main = do
     content <- B.getContents
-    let result = main_test content
+    let result = parseIniFile content
     either (\err -> putStrLn err >> exitFailure)
-           (\success -> ((putStrLn . show) success) >> exitSuccess)
+           (\success -> (B.putStr $ prettyPrint success) >> exitSuccess)
            result
+
+-- main :: IO ()
+-- main = do
+--     content <- B.getContents
+--     let result = main_test content
+--     either (\err -> putStrLn err >> exitFailure)
+--            (\success -> ((putStrLn . show) success) >> exitSuccess)
+--            result
 
 
