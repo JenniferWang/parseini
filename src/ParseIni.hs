@@ -133,6 +133,10 @@ pEscape :: Parser Char
 pEscape = choice (zipWith decode "bnfrt\\\"/" "\b\n\f\r\t\\\"/")
   where decode c r = r <$ char c
 
+pNameEscape :: Parser Char
+pNameEscape = choice (zipWith decode "bt\\\"" "\b\t\\\"")
+  where decode c r = r <$ char c
+
 -- TODO: this is a very ugly implementation
 pEscapeByte :: Parser B.ByteString
 pEscapeByte = pack <$> do c <- pEscape
@@ -166,7 +170,7 @@ pName = many (C.satisfy (C.inClass "a-zA-Z0-9-."))
 
 pSubName :: Parser String
 pSubName = many namechar
-  where namechar = (char '\\' *> pEscape)
+  where namechar = (char '\\' *> pNameEscape)
                   <|> C.satisfy (C.notInClass "\"\\")
 -------------------------------------------------------------------------------
 -- Variables and Values
@@ -250,17 +254,15 @@ pString = do
 
 pSpecialCharInString :: Char -> Parser B.ByteString
 pSpecialCharInString c
-  | c == '\\' = do escape <- pBackSlash
-                   rest <- pString
-                   return (B.append escape rest)
-  | c == '\"' = do quoted <- pQuoted
-                   rest <- pString
-                   return (B.append quoted rest)
+  | c == '\\' = B.append <$> pBackSlash <*> pString
+  | c == '\"' = B.append <$> pQuoted    <*> pString
   | c == ' '  = do sp <- pInterSpaces
-                   rest <- pString
-                   if (rest == pack "")
-                      then return rest
-                      else return (B.append sp rest)
+                   if (sp == pack "")
+                      then pEmpty
+                      else do rest <- pString
+                              if (rest == pack "")
+                                then return rest
+                                else return (B.append sp rest)
   | c `elem` ['#', ';'] = pSkipRestOfLine *> pEmpty
   | otherwise = return (pack "You hit the wrong place")
 
@@ -273,7 +275,7 @@ pInterSpaces = do
   sp <- pSpaces
   next <- peekChar
   if (next `elem` [Just '\n', Just ';', Just '#'])
-     then pSkipRestOfLine >> return (pack "")
+     then pSkipRestOfLine >> pEmpty
      else return sp
 
 pQuoted :: Parser B.ByteString

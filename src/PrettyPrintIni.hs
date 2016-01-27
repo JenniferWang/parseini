@@ -28,7 +28,7 @@ eq = BC.singleton '='
 printSectName :: INISectName -> BC.ByteString
 printSectName (ISect s) = BC.concat [lbrac, s, rbrac, eol]
 printSectName (ISubsect s1 s2) = BC.concat [
-  lbrac, s1, spaces 1, quote, s2, quote, rbrac, eol
+  lbrac, s1, spaces 1, quote, (escape s2), quote, rbrac, eol
   ]
 
 printSection :: INISection -> BC.ByteString
